@@ -113,13 +113,6 @@ static int input_boost_freq;
 static int timer_slack_val = DEFAULT_TIMER_SLACK;
 
 /*
- * Whether to align timer windows across all CPUs. When
- * use_sched_load is true, this flag is ignored and windows
- * will always be aligned.
- */
-static bool align_windows = true;
-
-/*
  * Stay at max freq for at least max_freq_hysteresis before dropping
  * frequency.
  */
@@ -131,16 +124,9 @@ static bool io_is_busy;
 static u64 round_to_nw_start(u64 jif)
 {
 	unsigned long step = usecs_to_jiffies(timer_rate);
-	u64 ret;
 
-	if (align_windows) {
-		do_div(jif, step);
-		ret = (jif + 1) * step;
-	} else {
-		ret = jiffies + usecs_to_jiffies(timer_rate);
-	}
-
-	return ret;
+	do_div(jif, step);
+	return (jif + 1) * step;
 }
 
 static void cpufreq_interactive_timer_resched(unsigned long cpu)
@@ -277,11 +263,11 @@ static void cpufreq_interactive_timer(unsigned long data)
 
 	cpufreq_notify_utilization(pcpu->policy, cpu_load);
 
-	if (cpu_load >= go_hispeed_load && boosted) {
+	if (cpu_load >= go_hispeed_load) {
 		if (pcpu->policy->cur < hispeed_freq) {
 			new_freq = hispeed_freq;
 		} else {
-			new_freq = pcpu->policy->min + cpu_load * (pcpu->policy->max - pcpu->policy->min) / 100;
+			new_freq = pcpu->policy->max * cpu_load / 100;
 
 			if (new_freq < hispeed_freq)
 				new_freq = hispeed_freq;
@@ -289,10 +275,10 @@ static void cpufreq_interactive_timer(unsigned long data)
 	} else if (cpu_load <= 5) {
 		new_freq = pcpu->policy->cpuinfo.min_freq;
 	} else {
-		new_freq = pcpu->policy->min + cpu_load * (pcpu->policy->max - pcpu->policy->min) / 100;
+		new_freq = pcpu->policy->max * cpu_load / 100;
 	}
-
-	if (new_freq < input_boost_freq && boosted)
+	
+	if (boosted && new_freq < input_boost_freq)
 		new_freq = input_boost_freq;
 
 	if (pcpu->policy->cur >= hispeed_freq &&
@@ -306,7 +292,7 @@ static void cpufreq_interactive_timer(unsigned long data)
 	pcpu->local_hvtime = now;
 
 	if (cpufreq_frequency_table_target(pcpu->policy, pcpu->freq_table,
-					   new_freq, CPUFREQ_RELATION_L,
+					   new_freq, CPUFREQ_RELATION_H,
 					   &index)) {
 		spin_unlock_irqrestore(&pcpu->target_freq_lock, flags);
 		goto rearm;
@@ -337,6 +323,7 @@ static void cpufreq_interactive_timer(unsigned long data)
 	 * or above the selected frequency for a minimum of min_sample_time,
 	 * if not boosted to hispeed_freq.  If boosted to hispeed_freq then we
 	 * allow the speed to drop as soon as the boostpulse duration expires
+	 * (or the indefinite boost is turned off).
 	 */
 
 	if (!boosted || new_freq > hispeed_freq) {
@@ -477,7 +464,7 @@ static int cpufreq_interactive_speedchange_task(void *data)
 			unsigned int j;
 			unsigned int max_freq = 0;
 			struct cpufreq_interactive_cpuinfo *pjcpu;
-			u64 hvt = 0;
+			u64 hvt;
 
 			pcpu = &per_cpu(cpuinfo, cpu);
 			if (!down_read_trylock(&pcpu->enable_sem))
@@ -730,28 +717,6 @@ static struct global_attr max_freq_hysteresis_attr =
 	__ATTR(max_freq_hysteresis, 0644, show_max_freq_hysteresis,
 		store_max_freq_hysteresis);
 
-static ssize_t show_align_windows(struct kobject *kobj,
-				     struct attribute *attr, char *buf)
-{
-	return sprintf(buf, "%u\n", align_windows);
-}
-
-static ssize_t store_align_windows(struct kobject *kobj,
-			struct attribute *attr, const char *buf, size_t count)
-{
-	int ret;
-	unsigned long val;
-
-	ret = strict_strtoul(buf, 0, &val);
-	if (ret < 0)
-		return ret;
-	align_windows = val;
-	return count;
-}
-
-static struct global_attr align_windows_attr = __ATTR(align_windows, 0644,
-		show_align_windows, store_align_windows);
-
 static ssize_t show_go_hispeed_load(struct kobject *kobj,
 				     struct attribute *attr, char *buf)
 {
@@ -946,13 +911,7 @@ static struct attribute *interactive_attributes[] = {
 	&input_boost_freq_attr.attr,
 	&io_is_busy_attr.attr,
 	&max_freq_hysteresis_attr.attr,
-	&align_windows_attr.attr,
 	NULL,
-};
-
-static struct attribute_group interactive_attr_group = {
-	.attrs = interactive_attributes,
-	.name = "blu_active",
 };
 
 static void interactive_input_event(struct input_handle *handle,
@@ -1025,6 +984,11 @@ static struct input_handler interactive_input_handler = {
 	.disconnect	= interactive_input_disconnect,
 	.name		= "blu_active",
 	.id_table	= interactive_ids,
+};
+
+static struct attribute_group interactive_attr_group = {
+	.attrs = interactive_attributes,
+	.name = "blu_active",
 };
 
 static int cpufreq_interactive_idle_notifier(struct notifier_block *nb,
@@ -1104,7 +1068,7 @@ static int cpufreq_governor_blu_active(struct cpufreq_policy *policy,
 			mutex_unlock(&gov_lock);
 			return rc;
 		}
-
+		
 		idle_notifier_register(&cpufreq_interactive_idle_nb);
 		cpufreq_register_notifier(
 			&cpufreq_notifier_block, CPUFREQ_TRANSITION_NOTIFIER);
@@ -1127,7 +1091,7 @@ static int cpufreq_governor_blu_active(struct cpufreq_policy *policy,
 			mutex_unlock(&gov_lock);
 			return 0;
 		}
-
+		
 		cpufreq_unregister_notifier(
 			&cpufreq_notifier_block, CPUFREQ_TRANSITION_NOTIFIER);
 		idle_notifier_unregister(&cpufreq_interactive_idle_nb);
@@ -1245,7 +1209,7 @@ module_init(cpufreq_blu_active_init);
 static void __exit cpufreq_interactive_exit(void)
 {
 	unsigned int cpu;
-
+	
 	cpufreq_unregister_governor(&cpufreq_gov_blu_active);
 	for_each_possible_cpu(cpu) {
 		if(!cpu)
@@ -1256,12 +1220,6 @@ static void __exit cpufreq_interactive_exit(void)
 }
 
 module_exit(cpufreq_interactive_exit);
-
-MODULE_AUTHOR("Mike Chan <mike@android.com>");
-MODULE_DESCRIPTION("'cpufreq_interactive' - A cpufreq governor for "
-	"Latency sensitive workloads");
-MODULE_LICENSE("GPL");
-
 
 MODULE_AUTHOR("Mike Chan <mike@android.com>");
 MODULE_AUTHOR("engstk <eng.stk@sapo.pt>");
