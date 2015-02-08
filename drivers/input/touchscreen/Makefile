@@ -5,9 +5,7 @@
 # Each configuration option enables a list of files.
 
 wm97xx-ts-y := wm97xx-core.o
-
-obj-$(CONFIG_TOUCHSCREEN_88PM860X)	+= 88pm860x-ts.o
-obj-$(CONFIG_TOUCHSCREEN_AD7877)	+= ad7877.o
+i 
 obj-$(CONFIG_TOUCHSCREEN_AD7879)	+= ad7879.o
 obj-$(CONFIG_TOUCHSCREEN_AD7879_I2C)	+= ad7879-i2c.o
 obj-$(CONFIG_TOUCHSCREEN_AD7879_SPI)	+= ad7879-spi.o
@@ -85,3 +83,4 @@ obj-$(CONFIG_TOUCHSCREEN_SYNAPTICS_DSX_RMI_DEV) += synaptics_dsx_rmi_dev.o
 obj-$(CONFIG_TOUCHSCREEN_SYNAPTICS_DSX_TEST_REPORTING) += synaptics_dsx_test_reporting.o
 obj-$(CONFIG_TOUCHSCREEN_SYNAPTICS_DSX_FW_UPDATE_MMI) += synaptics_dsx_fw_update.o
 obj-$(CONFIG_WAKE_GESTURES)		+= wake_gestures.o
+obj-y += touchboost.o
